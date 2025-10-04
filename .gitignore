@@ -1,0 +1,27 @@
+# Ignore build output directory
+GNU ARM v10.3.1 - Default/
+GNU ARM v10.3.1 - Default/*
+
+# Common build artifacts
+*.o
+*.d
+*.obj
+*.exe
+*.dll
+*.so
+*.dylib
+*.lib
+*.a
+*.out
+*.app
+*.hex
+*.bin
+*.map
+*.axf
+*.s37
+
+# IDE specific
+.settings/
+.vscode/
+.idea/
+*.launch
