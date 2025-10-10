@@ -35,8 +35,13 @@
 #include "nvm3_default.h"
 #include "sl_bluetooth.h"
 
+// Feature enable/disable flags
+#define BONDING_ENABLE 1
+
+#if BONDING_ENABLE
 // NVM3 key for bonding validation
 #define NVM3_KEY_BONDING_VALID    0x1000
+#endif
 
 /**************************************************************************//**
  * Application Init.
@@ -48,6 +53,7 @@ void app_init(void);
  *****************************************************************************/
 void app_process_action(void);
 
+#if BONDING_ENABLE
 /**************************************************************************//**
  * Check if bonding data is valid.
  * Returns true if valid, false if corrupted or missing.
@@ -65,5 +71,6 @@ void app_mark_bonding_valid(void);
  * Notifies user and takes recovery action.
  *****************************************************************************/
 void app_handle_bonding_corrupted(void);
+#endif
 
 #endif // APP_H

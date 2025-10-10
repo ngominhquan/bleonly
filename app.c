@@ -31,10 +31,58 @@
 #include "app_assert.h"
 #include "sl_bluetooth.h"
 #include "app.h"
+#include "gatt_db.h"
+#include <string.h>
 
 // The advertising set handle allocated from Bluetooth stack.
 static uint8_t advertising_set_handle = 0xff;
 static uint8_t conn_handle = 0xFF;
+
+// Variables for delayed bonding
+#if BONDING_ENABLE
+static bool bonding_pending = false;
+static uint32_t bonding_delay_counter = 0;
+#define BONDING_DELAY_COUNT 30  // Approximately 300ms assuming app_process_action runs every ~10ms
+#endif
+
+// Company ID for Silicon Labs
+#define SILABS_COMPANY_ID    0x0077
+
+// Custom advertising data flags
+#define ADV_FLAG_NEEDS_PAIRING   0x01
+
+// Helper function to set advertising data with manufacturer specific data
+static void set_adv_data_with_mfg_data(uint8_t custom_flags) {
+    uint8_t adv_data[31];
+    size_t adv_len = 0;
+
+    // Add Flags (LE General Discoverable, BR/EDR disabled)
+    adv_data[adv_len++] = 2;       // length
+    adv_data[adv_len++] = 0x01;    // Flags AD type
+    adv_data[adv_len++] = 0x06;    // Flags value (LE General, no BR/EDR)
+
+    // Add Complete Local Name
+    const char* device_name = "fanbandble";
+    uint8_t name_len = strlen(device_name);
+    adv_data[adv_len++] = name_len + 1;  // length (1 type + name length)
+    adv_data[adv_len++] = 0x09;          // Complete Local Name AD type
+    memcpy(&adv_data[adv_len], device_name, name_len);
+    adv_len += name_len;
+
+    // Add Manufacturer Specific Data
+    adv_data[adv_len++] = 4;       // length (1 type + 2 company id + 1 data)
+    adv_data[adv_len++] = 0xFF;    // AD type (Manufacturer Specific Data)
+    adv_data[adv_len++] = (uint8_t)(SILABS_COMPANY_ID & 0xFF);        // Company ID LSB
+    adv_data[adv_len++] = (uint8_t)((SILABS_COMPANY_ID >> 8) & 0xFF); // Company ID MSB
+    adv_data[adv_len++] = custom_flags;  // rebond flag. 1: rebond neede; 0: normal
+
+    // Set the advertising data
+    sl_status_t sc = sl_bt_legacy_advertiser_set_data(advertising_set_handle,
+                                       0, // advertising data (not scan response)
+                                       adv_len,
+                                       adv_data);
+    app_assert_status(sc);
+}
 
 /**************************************************************************//**
  * Application Init.
@@ -57,6 +105,23 @@ SL_WEAK void app_process_action(void)
   // This is called infinitely.                                              //
   // Do not call blocking functions from here!                               //
   /////////////////////////////////////////////////////////////////////////////
+  
+#if BONDING_ENABLE
+  // Check if bonding is pending and increment counter
+  if (bonding_pending) {
+    bonding_delay_counter++;
+    
+    // Check if delay count has been reached (approximately 300ms)
+    if (bonding_delay_counter >= BONDING_DELAY_COUNT) {
+      // Delay has passed, request bonding now
+      sl_status_t sc = sl_bt_sm_increase_security(conn_handle);
+      app_assert_status(sc);
+      
+      // Clear the pending flag
+      bonding_pending = false;
+    }
+  }
+#endif
 }
 
 /**************************************************************************//**
@@ -68,7 +133,6 @@ SL_WEAK void app_process_action(void)
 void sl_bt_on_event(sl_bt_msg_t *evt)
 {
   sl_status_t sc;
-  int16_t min_pwr, max_pwr;
 
   switch (SL_BT_MSG_ID(evt->header)) {
     // -------------------------------
@@ -83,10 +147,8 @@ void sl_bt_on_event(sl_bt_msg_t *evt)
       sc = sl_bt_advertiser_create_set(&advertising_set_handle);
       app_assert_status(sc);
 
-      // Generate data for advertising
-      sc = sl_bt_legacy_advertiser_generate_data(advertising_set_handle,
-                                                 sl_bt_advertiser_general_discoverable);
-      app_assert_status(sc);
+      // Set advertising data with manufacturer specific data (no pairing needed)
+      set_adv_data_with_mfg_data(0x00);
 
       // Set advertising interval to 100ms.
       sc = sl_bt_advertiser_set_timing(
@@ -97,6 +159,7 @@ void sl_bt_on_event(sl_bt_msg_t *evt)
         0);  // max. num. adv. events
       app_assert_status(sc);
 
+#if BONDING_ENABLE
       sc = sl_bt_sm_configure(0x00, sm_io_capability_noinputnooutput);
       app_assert_status(sc);
 
@@ -108,8 +171,9 @@ void sl_bt_on_event(sl_bt_msg_t *evt)
 
       // Maximum allowed bonding count: 8
       // New bonding will overwrite the bonding that was used the longest time ago
-      sc = sl_bt_sm_store_bonding_configuration(1, 0x4);
+      sc = sl_bt_sm_store_bonding_configuration(1, 0x2);
       app_assert_status(sc);
+#endif
 
       // Start advertising and enable connections.
       sc = sl_bt_legacy_advertiser_start(advertising_set_handle,
@@ -121,17 +185,18 @@ void sl_bt_on_event(sl_bt_msg_t *evt)
     // This event indicates that a new connection was opened.
     case sl_bt_evt_connection_opened_id:
       conn_handle = evt->data.evt_connection_opened.connection;
-      sc = sl_bt_sm_increase_security(conn_handle);
-      app_assert_status(sc);
+#if BONDING_ENABLE
+      // Set a flag to delay bonding request and initialize counter
+      bonding_pending = true;
+      bonding_delay_counter = 0;
+#endif
       break;
 
     // -------------------------------
     // This event indicates that a connection was closed.
     case sl_bt_evt_connection_closed_id:
-      // Generate data for advertising
-      sc = sl_bt_legacy_advertiser_generate_data(advertising_set_handle,
-                                                 sl_bt_advertiser_general_discoverable);
-      app_assert_status(sc);
+      // Set advertising data with manufacturer specific data (no pairing needed)
+      set_adv_data_with_mfg_data(0x00);
 
       // Restart advertising after client has disconnected.
       sc = sl_bt_legacy_advertiser_start(advertising_set_handle,
@@ -139,11 +204,27 @@ void sl_bt_on_event(sl_bt_msg_t *evt)
       app_assert_status(sc);
       break;
 
+#if BONDING_ENABLE
     case sl_bt_evt_sm_bonding_failed_id:
-      //sl_bt_connection_close(conn_handle);
-      //sc =sl_bt_sm_delete_bondings();
-      //app_assert_status(sc);
+      if (evt->data.evt_sm_bonding_failed.reason == 0x1006 ||  // PIN/Key missing
+        evt->data.evt_sm_bonding_failed.reason == 0x1208 ||  // Command disallowed
+        evt->data.evt_sm_bonding_failed.reason == 0x1205 ||  // Pairing not supported
+        evt->data.evt_sm_bonding_failed.reason == 0x120B) {  // Authentication failed        
+        sc = sl_bt_sm_delete_bondings();
+        app_assert_status(sc);
+      }    
+      // Close the connection since bonding failed
+      // sl_bt_connection_close(conn_handle);
+
+      // Set advertising data with "needs pairing" flag
+      set_adv_data_with_mfg_data(ADV_FLAG_NEEDS_PAIRING);
+
+      // Restart advertising
+      sc = sl_bt_legacy_advertiser_start(advertising_set_handle,
+                                         sl_bt_advertiser_connectable_scannable);
+      app_assert_status(sc);
       break;
+#endif
 
     ///////////////////////////////////////////////////////////////////////////
     // Add additional event handlers here as your application requires!      //
