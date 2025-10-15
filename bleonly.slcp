@@ -29,19 +29,22 @@ component:
 - {id: bluetooth_feature_gatt_server}
 - {id: in_place_ota_dfu}
 - {id: bluetooth_feature_sm}
-- {id: bluetooth_feature_legacy_advertiser}
 - {id: mpu}
+- {id: bluetooth_feature_legacy_advertiser}
+- {id: EFR32BG24A010F1024IM40}
 - {id: gatt_configuration}
 - {id: gatt_service_device_information}
 - {id: bluetooth_stack}
+- instance: [inst]
+  id: iostream_eusart
 - {id: rail_util_pti}
 - {id: bluetooth_feature_gatt}
 - {id: bluetooth_feature_legacy_scanner}
+- {id: app_log}
 - {id: bt_post_build}
 - {id: bluetooth_feature_connection}
 - {id: bluetooth_feature_system}
 - {id: component_catalog}
-- {id: EFR32BG24A010F1024IM40}
 - {id: bootloader_interface}
 - {id: app_assert}
 other_file:

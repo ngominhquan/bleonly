@@ -32,8 +32,9 @@
 #include "sl_bluetooth.h"
 #include "app.h"
 #include "gatt_db.h"
+#include "em_gpio.h"
 #include <string.h>
-
+#include "dbg.h"
 // The advertising set handle allocated from Bluetooth stack.
 static uint8_t advertising_set_handle = 0xff;
 static uint8_t conn_handle = 0xFF;
@@ -93,6 +94,10 @@ SL_WEAK void app_init(void)
   // Put your additional application init code here!                         //
   // This is called once during start-up.                                    //
   /////////////////////////////////////////////////////////////////////////////
+
+  GPIO_DbgSWDIOEnable(false);
+  GPIO_DbgSWDClkEnable(false);
+
 }
 
 /**************************************************************************//**
@@ -114,7 +119,11 @@ SL_WEAK void app_process_action(void)
     // Check if delay count has been reached (approximately 300ms)
     if (bonding_delay_counter >= BONDING_DELAY_COUNT) {
       // Delay has passed, request bonding now
+      app_log_mine("Bonding: requesting security increase on conn %d\r\n", conn_handle);
       sl_status_t sc = sl_bt_sm_increase_security(conn_handle);
+      if (sc != SL_STATUS_OK) {
+        app_log_mine("Bonding: increase_security failed, status=0x%04lx\r\n", sc);
+      }
       app_assert_status(sc);
       
       // Clear the pending flag
@@ -160,6 +169,7 @@ void sl_bt_on_event(sl_bt_msg_t *evt)
       app_assert_status(sc);
 
 #if BONDING_ENABLE
+      app_log_mine("Bonding: configuring security manager\r\n");
       sc = sl_bt_sm_configure(0x00, sm_io_capability_noinputnooutput);
       app_assert_status(sc);
 
@@ -173,6 +183,7 @@ void sl_bt_on_event(sl_bt_msg_t *evt)
       // New bonding will overwrite the bonding that was used the longest time ago
       sc = sl_bt_sm_store_bonding_configuration(1, 0x2);
       app_assert_status(sc);
+      app_log_mine("Bonding: SM configured - bondable mode enabled\r\n");
 #endif
 
       // Start advertising and enable connections.
@@ -185,16 +196,21 @@ void sl_bt_on_event(sl_bt_msg_t *evt)
     // This event indicates that a new connection was opened.
     case sl_bt_evt_connection_opened_id:
       conn_handle = evt->data.evt_connection_opened.connection;
+      app_log_mine("Connection opened: handle=%d, bonding=%d\r\n", 
+                   conn_handle, evt->data.evt_connection_opened.bonding);
 #if BONDING_ENABLE
       // Set a flag to delay bonding request and initialize counter
       bonding_pending = true;
       bonding_delay_counter = 0;
+      app_log_mine("Bonding: delayed bonding scheduled\r\n");
 #endif
       break;
 
     // -------------------------------
     // This event indicates that a connection was closed.
     case sl_bt_evt_connection_closed_id:
+      app_log_mine("Connection closed: reason=0x%04x\r\n", 
+                   evt->data.evt_connection_closed.reason);
       // Set advertising data with manufacturer specific data (no pairing needed)
       set_adv_data_with_mfg_data(0x00);
 
@@ -206,10 +222,16 @@ void sl_bt_on_event(sl_bt_msg_t *evt)
 
 #if BONDING_ENABLE
     case sl_bt_evt_sm_bonding_failed_id:
+      app_log_mine("Bonding FAILED: conn=%d, reason=0x%04x\r\n",
+                   evt->data.evt_sm_bonding_failed.connection,
+                   evt->data.evt_sm_bonding_failed.reason);
+      
       if (evt->data.evt_sm_bonding_failed.reason == 0x1006 ||  // PIN/Key missing
         evt->data.evt_sm_bonding_failed.reason == 0x1208 ||  // Command disallowed
         evt->data.evt_sm_bonding_failed.reason == 0x1205 ||  // Pairing not supported
-        evt->data.evt_sm_bonding_failed.reason == 0x120B) {  // Authentication failed        
+        evt->data.evt_sm_bonding_failed.reason == 0x120B) {  // Authentication failed
+        app_log_mine("Bonding: deleting all bondings due to error 0x%04x\r\n",
+                     evt->data.evt_sm_bonding_failed.reason);
         sc = sl_bt_sm_delete_bondings();
         app_assert_status(sc);
       }    
@@ -218,11 +240,39 @@ void sl_bt_on_event(sl_bt_msg_t *evt)
 
       // Set advertising data with "needs pairing" flag
       set_adv_data_with_mfg_data(ADV_FLAG_NEEDS_PAIRING);
+      app_log_mine("Bonding: advertising data updated with NEEDS_PAIRING flag\r\n");
 
       // Restart advertising
       sc = sl_bt_legacy_advertiser_start(advertising_set_handle,
                                          sl_bt_advertiser_connectable_scannable);
       app_assert_status(sc);
+      break;
+
+    case sl_bt_evt_sm_bonded_id:
+      app_log_mine("Bonding SUCCESS: conn=%d, bonding=%d, security_mode=%d\r\n",
+                   evt->data.evt_sm_bonded.connection,
+                   evt->data.evt_sm_bonded.bonding,
+                   evt->data.evt_sm_bonded.security_mode);
+      break;
+
+    case sl_bt_evt_sm_confirm_bonding_id:
+      app_log_mine("Bonding: confirm_bonding requested on conn=%d, bonding=%d\r\n",
+                   evt->data.evt_sm_confirm_bonding.connection,
+                   evt->data.evt_sm_confirm_bonding.bonding_handle);
+      // Confirm bonding request
+      sc = sl_bt_sm_bonding_confirm(evt->data.evt_sm_confirm_bonding.connection, 1);
+      app_assert_status(sc);
+      app_log_mine("Bonding: confirm_bonding accepted\r\n");
+      break;
+
+    case sl_bt_evt_sm_confirm_passkey_id:
+      app_log_mine("Bonding: passkey confirm requested on conn=%d, passkey=%lu\r\n",
+                   evt->data.evt_sm_confirm_passkey.connection,
+                   evt->data.evt_sm_confirm_passkey.passkey);
+      // Auto-confirm passkey (for Just Works pairing)
+      sc = sl_bt_sm_passkey_confirm(evt->data.evt_sm_confirm_passkey.connection, 1);
+      app_assert_status(sc);
+      app_log_mine("Bonding: passkey confirmed\r\n");
       break;
 #endif
 

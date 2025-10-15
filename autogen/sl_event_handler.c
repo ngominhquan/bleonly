@@ -12,12 +12,16 @@
 #include "sl_rail_util_pti.h"
 #include "btl_interface.h"
 #include "sl_sleeptimer.h"
+#include "app_log.h"
 #include "sl_bluetooth.h"
+#include "sl_iostream_init_eusart_instances.h"
+#include "sl_iostream_stdlib_config.h"
 #include "sl_mbedtls.h"
 #include "sl_mpu.h"
 #include "nvm3_default.h"
 #include "psa/crypto.h"
 #include "sli_protocol_crypto.h"
+#include "sl_iostream_init_instances.h"
 #include "sl_power_manager.h"
 #include "sl_rail_util_power_manager_init.h"
 
@@ -44,10 +48,12 @@ void sl_service_init(void)
 {
   sl_sleeptimer_init();
   sl_hfxo_manager_init();
+  sl_iostream_stdlib_disable_buffering();
   sl_mbedtls_init();
   sl_mpu_disable_execute_from_ram();
   psa_crypto_init();
   sli_aes_seed_mask();
+  sl_iostream_init_instances();
 }
 
 void sl_stack_init(void)
@@ -60,6 +66,7 @@ void sl_stack_init(void)
 
 void sl_internal_app_init(void)
 {
+  app_log_init();
 }
 
 void sl_platform_process_action(void)
@@ -77,5 +84,10 @@ void sl_stack_process_action(void)
 
 void sl_internal_app_process_action(void)
 {
+}
+
+void sl_iostream_init_instances(void)
+{
+  sl_iostream_eusart_init_instances();
 }
 
